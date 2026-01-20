@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+    assignees:
+      - "iantsysog"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(workflows)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

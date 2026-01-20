@@ -1,0 +1,100 @@
+name: Format
+on:
+  push:
+    branches: [main, gomobile, c-archive]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  format-main:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: '6.2'
+      - run: brew install swift-format
+      - name: Format Swift code
+        run: swift-format format --recursive --in-place .
+      - id: changed
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+      - if: steps.changed.outputs.changed == 'true'
+        name: Commit and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add -A
+          git commit -m "chore: style $(git rev-parse --short HEAD) [$(date -u +"%Y-%m-%dT%H:%M:%SZ")]"
+          git pull --rebase origin main
+          git push
+  format-gomobile:
+    if: github.ref == 'refs/heads/gomobile' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: gomobile
+      - uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: '6.2'
+      - run: brew install swift-format
+      - name: Format Swift code
+        run: swift-format format --recursive --in-place .
+      - id: changed
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+      - if: steps.changed.outputs.changed == 'true'
+        name: Commit and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add -A
+          git commit -m "chore: style $(git rev-parse --short HEAD) [$(date -u +"%Y-%m-%dT%H:%M:%SZ")]"
+          git pull --rebase origin gomobile
+          git push origin gomobile --force
+  format-carchive:
+    if: github.ref == 'refs/heads/c-archive' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: c-archive
+      - uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: '6.2'
+      - run: brew install swift-format
+      - name: Format Swift code
+        run: swift-format format --recursive --in-place .
+      - id: changed
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+      - if: steps.changed.outputs.changed == 'true'
+        name: Commit and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add -A
+          git commit -m "chore: style $(git rev-parse --short HEAD) [$(date -u +"%Y-%m-%dT%H:%M:%SZ")]"
+          git pull --rebase origin c-archive
+          git push origin c-archive --force

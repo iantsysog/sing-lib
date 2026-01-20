@@ -1,0 +1,366 @@
+name: Release
+on:
+  schedule:
+    - cron: 0 2 * * *
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to checkout
+        type: string
+        required: false
+      tag:
+        description: Tag to checkout
+        type: string
+        required: false
+env:
+  REPO_OWNER: SagerNet
+  REPO_NAME: sing-box
+  TARGET_REPO_OWNER: iantsysog
+  TARGET_REPO_NAME: sing-lib
+jobs:
+  calculate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      commit_hash: ${{ steps.ver.outputs.commit_hash }}
+      release_version: ${{ steps.strip.outputs.release_version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get version
+        id: ver
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases"
+            LATEST_TAG=$(curl -s -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              "${API_URL}" | jq -r '.[] | select(.prerelease == true) | .tag_name' | sort -V | tail -1)
+            VERSION="${LATEST_TAG}"
+            TAG="${LATEST_TAG}"
+          fi
+
+          API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/git/refs/tags/${TAG}"
+          COMMIT_HASH=$(curl -s -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "${API_URL}" | jq -r '.object.sha' | cut -c1-7)
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "commit_hash=${COMMIT_HASH}" >> "${GITHUB_OUTPUT}"
+      - name: Strip v prefix for release
+        id: strip
+        run: |
+          RELEASE_VERSION="${{ steps.ver.outputs.version }}"
+          RELEASE_VERSION="${RELEASE_VERSION#v}"
+          echo "release_version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
+  check:
+    runs-on: ubuntu-latest
+    needs: calculate
+    outputs:
+      skip: ${{ steps.chk.outputs.skip }}
+    steps:
+      - name: Check release
+        id: chk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_VERSION="${{ needs.calculate.outputs.release_version }}"
+          API_URL="https://api.github.com/repos/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/tags/${RELEASE_VERSION}"
+          RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "${API_URL}")
+          HTTP_CODE=$(echo "${RESPONSE}" | tail -n1)
+          BODY=$(echo "${RESPONSE}" | sed '$d')
+
+          if [[ "${HTTP_CODE}" == "200" ]] && echo "${BODY}" | grep -q '"tag_name"'; then
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+          fi
+  build:
+    if: needs.check.outputs.skip == 'false'
+    runs-on: macos-26
+    needs: [calculate, check]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: gomobile
+            arch: universal
+          - mode: c-archive
+            arch: amd64
+          - mode: c-archive
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            Package.swift
+          sparse-checkout-cone-mode: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}
+          path: sing-box
+          ref: ${{ needs.calculate.outputs.tag }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+      - uses: actions/setup-node@v6
+        if: matrix.mode == 'gomobile'
+        with:
+          node-version: '24'
+      - name: Setup Gomobile
+        if: matrix.mode == 'gomobile'
+        run: |
+          cd sing-box
+          make lib_install
+          gomobile init
+      - name: Build gomobile
+        if: matrix.mode == 'gomobile'
+        run: |
+          cd sing-box
+          go run ./cmd/internal/build_libbox -target apple -platform macos
+          mv Libbox.xcframework sing-gomobile.xcframework
+          zip -ryX9 sing-lib-gomobile.xcframework.zip sing-gomobile.xcframework -x "*.DS_Store" -x "__MACOSX/*"
+      - name: Build C Archive
+        if: matrix.mode == 'c-archive'
+        run: |
+          cd sing-box
+          mkdir -p dist
+          GOOS=darwin GOARCH=${{ matrix.arch }} CGO_ENABLED=1 go build -buildmode=c-archive -o dist/libsingbox-macos-${{ matrix.arch }}.a ./cmd/sing-box
+          GOOS=darwin GOARCH=${{ matrix.arch }} CGO_ENABLED=1 go build -buildmode=c-archive -o dist/libsingbox.h ./cmd/sing-box
+          mv dist/libsingbox-macos-${{ matrix.arch }}.a dist/sing-carchive-${{ matrix.arch }}.a
+          mv dist/libsingbox.h dist/sing-carchive-${{ matrix.arch }}.h
+          cat > dist/module.modulemap <<MODULEMAP
+          module sing-carchive-${{ matrix.arch }} {
+              header "sing-carchive-${{ matrix.arch }}.h"
+              link "sing-carchive-${{ matrix.arch }}"
+              export *
+          }
+          MODULEMAP
+          zip -ry ../sing-lib-carchive-${{ matrix.arch }}.zip dist/sing-carchive-${{ matrix.arch }}.h dist/sing-carchive-${{ matrix.arch }}.a dist/module.modulemap
+      - uses: actions/upload-artifact@v6
+        if: matrix.mode == 'gomobile'
+        with:
+          name: gomobile-universal
+          path: sing-box/sing-lib-gomobile.xcframework.zip
+      - uses: actions/upload-artifact@v6
+        if: matrix.mode == 'c-archive'
+        with:
+          name: c-archive-${{ matrix.arch }}
+          path: sing-lib-carchive-${{ matrix.arch }}.zip
+  release:
+    if: needs.check.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    needs: [calculate, build]
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.calculate.outputs.release_version }}
+          name: ${{ needs.calculate.outputs.release_version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          make_latest: true
+          body: Compiled from ${{ needs.calculate.outputs.tag }}.
+          files: |
+            artifacts/sing-lib-gomobile.xcframework.zip
+            artifacts/sing-lib-carchive-amd64.zip
+            artifacts/sing-lib-carchive-arm64.zip
+  package-main:
+    if: needs.check.outputs.skip == 'false'
+    runs-on: macos-26
+    needs: [calculate, release]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get checksums
+        id: checksum
+        run: |
+          DOWNLOAD_URL="https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${{ needs.calculate.outputs.release_version }}"
+          curl -sL -o sing-lib-gomobile.xcframework.zip "${DOWNLOAD_URL}/sing-lib-gomobile.xcframework.zip"
+          curl -sL -o sing-lib-carchive-amd64.zip "${DOWNLOAD_URL}/sing-lib-carchive-amd64.zip"
+          curl -sL -o sing-lib-carchive-arm64.zip "${DOWNLOAD_URL}/sing-lib-carchive-arm64.zip"
+
+          echo "gomobile_checksum=$(shasum -a 256 sing-lib-gomobile.xcframework.zip | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+          echo "amd64_checksum=$(shasum -a 256 sing-lib-carchive-amd64.zip | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+          echo "arm64_checksum=$(shasum -a 256 sing-lib-carchive-arm64.zip | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+      - name: Update Package.swift
+        run: |
+          RELEASE_VERSION="${{ needs.calculate.outputs.release_version }}"
+          cat > Package.swift <<EOF
+          // swift-tools-version: 6.2
+
+          import PackageDescription
+          let package = Package(
+              name: "sing-lib",
+              platforms: [.macOS(.v26)],
+              products: [
+                  .library(name: "sing-gomobile", targets: ["sing-gomobile"]),
+                  .library(name: "sing-carchive-amd64", targets: ["sing-carchive-amd64"]),
+                  .library(name: "sing-carchive-arm64", targets: ["sing-carchive-arm64"])
+              ],
+              targets: [
+                  .binaryTarget(
+                      name: "sing-gomobile",
+                      url: "https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${RELEASE_VERSION}/sing-lib-gomobile.xcframework.zip",
+                      checksum: "${{ steps.checksum.outputs.gomobile_checksum }}"
+                  ),
+                  .binaryTarget(
+                      name: "sing-carchive-amd64",
+                      url: "https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${RELEASE_VERSION}/sing-lib-carchive-amd64.zip",
+                      checksum: "${{ steps.checksum.outputs.amd64_checksum }}"
+                  ),
+                  .binaryTarget(
+                      name: "sing-carchive-arm64",
+                      url: "https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${RELEASE_VERSION}/sing-lib-carchive-arm64.zip",
+                      checksum: "${{ steps.checksum.outputs.arm64_checksum }}"
+                  )
+              ]
+          )
+          EOF
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: '6.2'
+      - name: Install swift-format
+        run: brew install swift-format
+      - name: Format Package.swift
+        run: swift-format format --recursive --in-place .
+      - name: Commit and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add Package.swift
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat(main): bump ${{ needs.calculate.outputs.release_version }} ${{ needs.calculate.outputs.commit_hash }} [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
+          git push
+  package-gomobile:
+    if: needs.check.outputs.skip == 'false'
+    runs-on: macos-26
+    needs: [calculate, release]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get checksums
+        id: checksum
+        run: |
+          DOWNLOAD_URL="https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${{ needs.calculate.outputs.release_version }}"
+          curl -sL -o sing-lib-gomobile.xcframework.zip "${DOWNLOAD_URL}/sing-lib-gomobile.xcframework.zip"
+          echo "gomobile_checksum=$(shasum -a 256 sing-lib-gomobile.xcframework.zip | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+      - name: Update Package.swift
+        run: |
+          RELEASE_VERSION="${{ needs.calculate.outputs.release_version }}"
+          cat > Package.swift <<EOF
+          // swift-tools-version: 6.2
+
+          import PackageDescription
+          let package = Package(
+              name: "sing-lib",
+              platforms: [.macOS(.v26)],
+              products: [
+                  .library(name: "sing-gomobile", targets: ["sing-gomobile"])
+              ],
+              targets: [
+                  .binaryTarget(
+                      name: "sing-gomobile",
+                      url: "https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${RELEASE_VERSION}/sing-lib-gomobile.xcframework.zip",
+                      checksum: "${{ steps.checksum.outputs.gomobile_checksum }}"
+                  )
+              ]
+          )
+          EOF
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: '6.2'
+      - name: Install swift-format
+        run: brew install swift-format
+      - name: Format Package.swift
+        run: swift-format format --recursive --in-place .
+      - name: Switch to gomobile branch and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -b gomobile
+          git add Package.swift
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat(gomobile): bump ${{ needs.calculate.outputs.release_version }} ${{ needs.calculate.outputs.commit_hash }} [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
+          git push origin gomobile --force
+  package-carchive:
+    if: needs.check.outputs.skip == 'false'
+    runs-on: macos-26
+    needs: [calculate, release]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get checksums
+        id: checksum
+        run: |
+          DOWNLOAD_URL="https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${{ needs.calculate.outputs.release_version }}"
+          curl -sL -o sing-lib-carchive-amd64.zip "${DOWNLOAD_URL}/sing-lib-carchive-amd64.zip"
+          curl -sL -o sing-lib-carchive-arm64.zip "${DOWNLOAD_URL}/sing-lib-carchive-arm64.zip"
+          echo "amd64_checksum=$(shasum -a 256 sing-lib-carchive-amd64.zip | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+          echo "arm64_checksum=$(shasum -a 256 sing-lib-carchive-arm64.zip | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+      - name: Update Package.swift
+        run: |
+          RELEASE_VERSION="${{ needs.calculate.outputs.release_version }}"
+          cat > Package.swift <<EOF
+          // swift-tools-version: 6.2
+
+          import PackageDescription
+          let package = Package(
+              name: "sing-lib",
+              platforms: [.macOS(.v26)],
+              products: [
+                  .library(name: "sing-carchive-amd64", targets: ["sing-carchive-amd64"]),
+                  .library(name: "sing-carchive-arm64", targets: ["sing-carchive-arm64"])
+              ],
+              targets: [
+                  .binaryTarget(
+                      name: "sing-carchive-amd64",
+                      url: "https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${RELEASE_VERSION}/sing-lib-carchive-amd64.zip",
+                      checksum: "${{ steps.checksum.outputs.amd64_checksum }}"
+                  ),
+                  .binaryTarget(
+                      name: "sing-carchive-arm64",
+                      url: "https://github.com/${TARGET_REPO_OWNER}/${TARGET_REPO_NAME}/releases/download/${RELEASE_VERSION}/sing-lib-carchive-arm64.zip",
+                      checksum: "${{ steps.checksum.outputs.arm64_checksum }}"
+                  )
+              ]
+          )
+          EOF
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: '6.2'
+      - name: Install swift-format
+        run: brew install swift-format
+      - name: Format Package.swift
+        run: swift-format format --recursive --in-place .
+      - name: Switch to c-archive branch and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -b c-archive
+          git add Package.swift
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat(c-archive): bump ${{ needs.calculate.outputs.release_version }} ${{ needs.calculate.outputs.commit_hash }} [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
+          git push origin c-archive --force
