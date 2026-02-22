@@ -13,18 +13,18 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "sing-gomobile",
-            url: "https://github.com/iantsysog/sing-lib/releases/download/1.13.0-rc.4/sing-lib-gomobile.xcframework.zip",
-            checksum: "c929f56f6045af6ea9a066ee37a4aa4e9e615144ce53c5bf26271896ee5db25f"
+            url: "https://github.com/iantsysog/sing-lib/releases/download/1.13.0-rc.5/sing-lib-gomobile.xcframework.zip",
+            checksum: "45dd42a698a402521814252b3f84ddfc89c8fbdcc372c310a29aff26c224a97c"
         ),
         .binaryTarget(
             name: "sing-carchive-amd64",
-            url: "https://github.com/iantsysog/sing-lib/releases/download/1.13.0-rc.4/sing-lib-carchive-amd64.zip",
-            checksum: "4f61b824690746acfcb13915e956f6f42927f45f83d3af5beee80c1f5d854129"
+            url: "https://github.com/iantsysog/sing-lib/releases/download/1.13.0-rc.5/sing-lib-carchive-amd64.zip",
+            checksum: "cd153a45d86a633ffdf9c4d76215b150f2eccaf25a6ae6014a856f7cf51fbfa3"
         ),
         .binaryTarget(
             name: "sing-carchive-arm64",
-            url: "https://github.com/iantsysog/sing-lib/releases/download/1.13.0-rc.4/sing-lib-carchive-arm64.zip",
-            checksum: "a17c5b04389f7de55f4b0d7296d2c49ad780f2520f9324fcf602f174bfaec54e"
+            url: "https://github.com/iantsysog/sing-lib/releases/download/1.13.0-rc.5/sing-lib-carchive-arm64.zip",
+            checksum: "c92d5faf43a53bde17b7a4b40e31b5b1653ed137888fc41bc9399935fbe80820"
         ),
     ]
 )
