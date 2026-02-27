@@ -146,12 +146,12 @@ jobs:
           }
           MODULEMAP
           zip -ry ../sing-lib-carchive-${{ matrix.arch }}.zip dist/sing-carchive-${{ matrix.arch }}.h dist/sing-carchive-${{ matrix.arch }}.a dist/module.modulemap
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: matrix.mode == 'gomobile'
         with:
           name: gomobile-universal
           path: sing-box/sing-lib-gomobile.xcframework.zip
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: matrix.mode == 'c-archive'
         with:
           name: c-archive-${{ matrix.arch }}
@@ -161,7 +161,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [calculate, build]
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
