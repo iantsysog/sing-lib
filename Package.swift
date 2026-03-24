@@ -11,8 +11,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "sing-carchive",
-            url: "https://github.com/iantsysog/sing-lib/releases/download/1.14.0-alpha.3/sing-lib-carchive.xcframework.zip",
-            checksum: "a122e826252c857c3f99e0d555d39982710a5ad4ec8c2667414bbbe32d4ef0f7"
+            url: "https://github.com/iantsysog/sing-lib/releases/download/1.14.0-alpha.4/sing-lib-carchive.xcframework.zip",
+            checksum: "c16d8efbc41ea771c8170a61bff51da740fc8f13cb808086eab0d139898b27d3"
         )
     ]
 )
